@@ -1,31 +1,25 @@
 # ──────────────── Stage 1: build ────────────────
 FROM node:23-alpine AS builder
-
-# set working directory
 WORKDIR /app
 
-# install dependencies
+# 1) Install deps
 COPY package.json package-lock.json ./
-RUN npm install --frozen-lockfile
+RUN npm ci
 
-# copy source & build
+# 2) Copy & build
 COPY . .
-RUN npm build
+RUN npm run build
 
-# ──────────────── Stage 2: run ─────────────────
+# ──────────────── Stage 2: serve ────────────────
 FROM nginx:stable-alpine
-
-# remove default nginx config
+# Remove default config
 RUN rm /etc/nginx/conf.d/default.conf
 
-# copy our nginx config
+# 3) Add our Nginx config
 COPY nginx.conf /etc/nginx/conf.d/
 
-# copy built assets from builder
+# 4) Copy built app
 COPY --from=builder /app/build /usr/share/nginx/html
 
-# expose port 80
 EXPOSE 80
-
-# run nginx
 CMD ["nginx", "-g", "daemon off;"]

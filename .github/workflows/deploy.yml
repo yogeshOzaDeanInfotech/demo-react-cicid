@@ -1,0 +1,83 @@
+# File: .github/workflows/deploy.yml
+name: CI/CD for React App (with Nginx provisioning)
+
+on:
+    push:
+        branches: [main]
+
+jobs:
+    deploy:
+        runs-on: ubuntu-latest
+
+        steps:
+            # 1) Pull down your code
+            - name: Checkout
+              uses: actions/checkout@v3
+
+            # 2) SSH into EC2 and do everything: Nginx + Docker deploy
+            - name: Provision & Deploy on EC2
+              uses: appleboy/ssh-action@v0.1.6
+              with:
+                  host: ${{ secrets.EC2_HOST }} # your EC2 IP or DNS
+                  username: ec2-user # or ubuntu
+                  key: ${{ secrets.EC2_SSH_KEY }} # private SSH key
+                  port: 22
+                  script: |
+                      set -e
+
+                      ########## A) Install or update Nginx ##########
+                      sudo apt-get update -y
+                      sudo apt-get install -y nginx
+
+                      ########## B) Write Nginx site config ##########
+                      sudo tee /etc/nginx/sites-available/react-app.conf > /dev/null << 'EOF'
+                      upstream react_app {
+                          server 127.0.0.1:3000;
+                      }
+
+                      server {
+                          listen 80;
+                          server_name _;  # replace with your domain if you have one
+
+                          location / {
+                              proxy_pass         http://react_app;
+                              proxy_http_version 1.1;
+                              proxy_set_header   Upgrade $http_upgrade;
+                              proxy_set_header   Connection  "upgrade";
+                              proxy_set_header   Host        $host;
+                              proxy_cache_bypass $http_upgrade;
+                          }
+                      }
+                      EOF
+
+                      # Enable site (force-overwrite any existing symlink)
+                      sudo ln -sfn /etc/nginx/sites-available/react-app.conf /etc/nginx/sites-enabled/react-app.conf
+
+                      # Test & start Nginx
+                      sudo nginx -t
+                      sudo systemctl enable nginx
+                      sudo systemctl restart nginx
+
+                      ########## C) Deploy React app in Docker ##########
+                      # go to your project folder
+                      cd ~/react-app
+
+                      # ensure you're on the latest main
+                      git fetch origin main
+                      git reset --hard origin/main
+
+                      # build the Docker image
+                      docker build -t react-app:latest .
+
+                      # stop & remove old container (if any)
+                      docker stop react-app 2>/dev/null || true
+                      docker rm   react-app 2>/dev/null || true
+
+                      # run new container: container listens on 80, we map to host 3000
+                      docker run -d \
+                        --name react-app \
+                        -p 3000:80 \
+                        react-app:latest
+
+                      # cleanup dangling images
+                      docker image prune -f
